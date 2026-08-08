@@ -13,11 +13,18 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Source
-        uses: actions/checkout@v5
+      - name: Checkout Actions Repo (Get Config)
+        uses: actions/checkout@v4
+        with:
+          repository: 'wuying99130/iStoreOS-Actions'
+          path: 'actions_workspace'
+
+      - name: Checkout iStoreOS Source
+        uses: actions/checkout@v4
         with:
           repository: 'wuying99130/istoreos'
           ref: 'istoreos-24.10'
+          path: '.'
 
       - name: Initialization Environment
         env:
@@ -49,12 +56,12 @@ jobs:
 
       - name: Apply Config, DTS Fix and Network Settings
         run: |
-          # 1. 直接应用你上传的 NanoPi R1S-H3 专属配置文件
-          if [ -f "r1s-h3.config" ]; then
-            cp r1s-h3.config .config
-            echo "成功加载你的 r1s-h3.config 配置文件！"
+          # 1. 从 actions_workspace 目录中精准复制你的 r1s-h3.config 到编译根目录
+          if [ -f "actions_workspace/r1s-h3.config" ]; then
+            cp actions_workspace/r1s-h3.config .config
+            echo "成功加载 iStoreOS-Actions 仓库中的 r1s-h3.config 配置文件！"
           else
-            echo "错误：未找到 r1s-h3.config 文件，请确保已上传到仓库根目录！"
+            echo "错误：未找到 actions_workspace/r1s-h3.config 文件！"
             exit 1
           fi
 
@@ -117,32 +124,25 @@ jobs:
           echo "=== 正在精准提取 iStoreOS 固件及 Docker 容器包 ==="
           BUILD_DATE=$(date +%Y%m%d)
           
-          # 1. 提取 iStoreOS 常规 TF 卡刷机镜像 (.img.gz)
           for file in bin/targets/sunxi/cortexa7/*nanopi-r1*.img.gz; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               new_filename="istoreos-sunxi-cortexa7-nanopi-r1s-$BUILD_DATE.img.gz"
               cp -f "$file" "bin/out/$new_filename"
-              echo "已重命名镜像: $filename -> $new_filename"
             fi
           done
           
-          # 2. 提取适用于 Armbian Docker 的 rootfs 压缩包
           for file in bin/targets/sunxi/cortexa7/*rootfs.tar.gz; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               new_filename="istoreos-sunxi-cortexa7-rootfs-$BUILD_DATE.tar.gz"
               cp -f "$file" "bin/out/$new_filename"
-              echo "已提取 Docker 容器包: $filename -> $new_filename"
             fi
           done
           
           if [ -f "bin/targets/sunxi/cortexa7/sha256sums" ]; then
             cp -f bin/targets/sunxi/cortexa7/sha256sums bin/out/
           fi
-          
-          echo "=== 打包输出目录清单 ==="
-          ls -lh bin/out/
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
