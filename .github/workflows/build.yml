@@ -13,18 +13,18 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Actions Repo (Get Config)
-        uses: actions/checkout@v4
-        with:
-          repository: 'wuying99130/iStoreOS-Actions'
-          path: 'actions_workspace'
-
       - name: Checkout iStoreOS Source
         uses: actions/checkout@v4
         with:
           repository: 'wuying99130/istoreos'
           ref: 'istoreos-24.10'
-          path: '.'
+
+      - name: Checkout Actions Repo (Get Local Config)
+        uses: actions/checkout@v4
+        with:
+          repository: 'wuying99130/iStoreOS-Actions'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: 'actions_temp'
 
       - name: Initialization Environment
         env:
@@ -56,25 +56,25 @@ jobs:
 
       - name: Apply Config, DTS Fix and Network Settings
         run: |
-          # 1. 从 actions_workspace 目录中精准复制你的 r1s-h3.config 到编译根目录
-          if [ -f "actions_workspace/r1s-h3.config" ]; then
-            cp actions_workspace/r1s-h3.config .config
+          # 直接从刚才克隆下来的本地 actions_temp 仓库里拿 r1s-h3.config
+          if [ -f "actions_temp/r1s-h3.config" ]; then
+            cp -f actions_temp/r1s-h3.config .config
             echo "成功加载 iStoreOS-Actions 仓库中的 r1s-h3.config 配置文件！"
           else
-            echo "错误：未找到 actions_workspace/r1s-h3.config 文件！"
+            echo "错误：未能在 iStoreOS-Actions 仓库中找到 r1s-h3.config 文件！"
             exit 1
           fi
 
-          # 2. 确保开启容器 rootfs.tar.gz 压缩包输出
+          # 确保开启容器 rootfs.tar.gz 压缩包输出
           echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
           
-          # 3. 修复 DTS 文件中的 mmc2 (SDIO WiFi) 禁用状态为 okay
+          # 修复 DTS 文件中的 mmc2 (SDIO WiFi) 禁用状态为 okay
           DTS_FILE=$(find target/linux/sunxi/ -iname "*nanopi*r1s*.dts" 2>/dev/null | head -n 1)
           if [ -n "$DTS_FILE" ]; then
             sed -i '/&mmc2/,/};/s/status = "disabled";/status = "okay";/' "$DTS_FILE"
           fi
           
-          # 4. 植入开机固定 MAC、静态 IP 及 DHCP 极速响应初始化脚本
+          # 植入开机固定 MAC、静态 IP 及 DHCP 极速响应初始化脚本
           mkdir -p files/etc/uci-defaults
           cat << 'EOF' > files/etc/uci-defaults/99-custom-network-settings
           #!/bin/sh
