@@ -8,7 +8,170 @@ on:
         required: false
         default: ''
         type: string
+name: Build iStoreOS for NanoPi R1S-H3
 
+on:
+  workflow_dispatch:
+    inputs:
+      custom_feed_url:
+        description: '添加自定义软件源地址 (例如: https://...)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout iStoreOS Source
+        uses: actions/checkout@v4
+        with:
+          repository: 'wuying99130/istoreos'
+          ref: 'istoreos-24.10'
+
+      - name: Checkout Actions Repo (Get Local Config)
+        uses: actions/checkout@v4
+        with:
+          repository: 'wuying99130/iStoreOS-Actions'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: 'actions_temp'
+
+      - name: Initialization Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison gawk g++-multilib g++ \
+            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
+            file wget swig libelf-dev libgmp-dev libltdl-dev libmpc-dev libmpfr-dev \
+            libtool ninja-build p7zip p7zip-full qemu-utils u-boot-tools upx-ucl xxd
+
+      - name: Add Custom Feeds from Web Input
+        run: |
+          if [ -n "${{ inputs.custom_feed_url }}" ]; then
+            echo "检测到自定义源输入，正在添加: ${{ inputs.custom_feed_url }}"
+            echo "src-git custom_feed ${{ inputs.custom_feed_url }}" >> feeds.conf.default
+          else
+            echo "未输入自定义源，跳过..."
+          fi
+          
+          echo "=== 当前 Feeds 配置文件内容 ==="
+          cat feeds.conf.default
+
+      - name: Update Feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Apply Config, DTS Fix and Network Settings
+        run: |
+          # 1. 严格从 actions_temp 加载 r1s-h3.config 到顶层配置
+          if [ -f "actions_temp/r1s-h3.config" ]; then
+            cp -f actions_temp/r1s-h3.config .config
+            echo "成功加载 iStoreOS-Actions 仓库中的 r1s-h3.config 配置文件！"
+          else
+            echo "错误：未能在 iStoreOS-Actions 仓库中找到 r1s-h3.config 文件！"
+            exit 1
+          fi
+
+          # 2. 补齐核心输出与语言精简限制（仅保留中英文）
+          echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
+          echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
+          
+          # 3. 在配置阶段直接注入内核配置母本声明，并在编译前由全局机制自动对齐
+          echo "=== 开始向所有内核配置母本注入声明 ==="
+          find target/linux/sunxi/ -name "config-6.6*" -type f | while read cfg; do
+            echo "正在向 $cfg 写入内核声明..."
+            echo "# CONFIG_REALTEK_PHY_HWMON is not set" >> "$cfg"
+          done
+
+          # 4. 修复 DTS 文件中的 mmc2 (SDIO WiFi) 禁用状态为 okay
+          DTS_FILE=$(find target/linux/sunxi/ -iname "*nanopi*r1s*.dts" 2>/dev/null | head -n 1)
+          if [ -n "$DTS_FILE" ]; then
+            sed -i '/&mmc2/,/};/s/status = "disabled";/status = "okay";/' "$DTS_FILE"
+          fi
+          
+          # 5. 植入开机固定 MAC、静态 IP 及 DHCP 极速响应初始化脚本
+          mkdir -p files/etc/uci-defaults
+          cat << 'EOF' > files/etc/uci-defaults/99-custom-network-settings
+          #!/bin/sh
+          
+          uci set network.lan=interface
+          uci set network.lan.device='br-lan'
+          uci set network.lan.proto='static'
+          uci set network.lan.ipaddr='192.168.1.1'
+          uci set network.lan.netmask='255.255.255.0'
+          uci set network.lan.stp='0'
+          uci set network.lan.delegate='0'
+          uci set network.lan.force_link='1'
+          
+          uci set network.@device[0]=device
+          uci set network.@device[0].name='br-lan'
+          uci set network.@device[0].type='bridge'
+          uci set network.@device[0].macaddr='02:42:ac:11:00:02'
+          
+          uci set dhcp.lan=dhcp
+          uci set dhcp.lan.interface='lan'
+          uci set dhcp.lan.start='100'
+          uci set dhcp.lan.limit='150'
+          uci set dhcp.lan.leasetime='12h'
+          uci set dhcp.lan.authoritative='1'
+          uci set dhcp.lan.force='1'
+          
+          uci commit network
+          uci commit dhcp
+          EOF
+          chmod +x files/etc/uci-defaults/99-custom-network-settings
+          
+          # 6. 生成顶层依赖配置
+          make defconfig
+
+      - name: Download Package Toolchain
+        run: |
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile Firmware
+        run: |
+          # 核心双重保险：在正式编译前，调用内核旧配置对齐命令，确保任何残留的 (NEW) 选项自动应用默认值
+          yes "" | make kernel_olddefconfig || true
+          
+          # 正式满负荷编译
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Organize Artifacts
+        run: |
+          mkdir -p bin/out
+          
+          echo "=== 正在精准提取 iStoreOS 固件及 Docker 容器包 ==="
+          BUILD_DATE=$(date +%Y%m%d)
+          
+          for file in bin/targets/sunxi/cortexa7/*nanopi-r1*.img.gz; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              new_filename="istoreos-sunxi-cortexa7-nanopi-r1s-$BUILD_DATE.img.gz"
+              cp -f "$file" "bin/out/$new_filename"
+            fi
+          done
+          
+          for file in bin/targets/sunxi/cortexa7/*rootfs.tar.gz; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              new_filename="istoreos-sunxi-cortexa7-rootfs-$BUILD_DATE.tar.gz"
+              cp -f "$file" "bin/out/$new_filename"
+            fi
+          done
+          
+          if [ -f "bin/targets/sunxi/cortexa7/sha256sums" ]; then
+            cp -f bin/targets/sunxi/cortexa7/sha256sums bin/out/
+          fi
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iStoreOS-NanoPi-R1S-H3
+          path: bin/out/*
 jobs:
   build:
     runs-on: ubuntu-22.04
