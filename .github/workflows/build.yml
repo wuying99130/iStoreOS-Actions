@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       custom_feed_url:
-        description: '添加自定义软件源地址 (例如: https://github.com/...)'
+        description: '添加自定义软件源地址 (例如: https://...)'
         required: false
         default: ''
         type: string
@@ -56,7 +56,7 @@ jobs:
 
       - name: Apply Config, DTS Fix and Network Settings
         run: |
-          # 直接从刚才克隆下来的本地 actions_temp 仓库里拿 r1s-h3.config
+          # 1. 从刚才克隆下来的本地 actions_temp 仓库里拿 r1s-h3.config
           if [ -f "actions_temp/r1s-h3.config" ]; then
             cp -f actions_temp/r1s-h3.config .config
             echo "成功加载 iStoreOS-Actions 仓库中的 r1s-h3.config 配置文件！"
@@ -65,16 +65,16 @@ jobs:
             exit 1
           fi
 
-          # 确保开启容器 rootfs.tar.gz 压缩包输出
+          # 2. 确保开启容器 rootfs.tar.gz 压缩包输出
           echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
           
-          # 修复 DTS 文件中的 mmc2 (SDIO WiFi) 禁用状态为 okay
+          # 3. 修复 DTS 文件中的 mmc2 (SDIO WiFi) 禁用状态为 okay
           DTS_FILE=$(find target/linux/sunxi/ -iname "*nanopi*r1s*.dts" 2>/dev/null | head -n 1)
           if [ -n "$DTS_FILE" ]; then
             sed -i '/&mmc2/,/};/s/status = "disabled";/status = "okay";/' "$DTS_FILE"
           fi
           
-          # 植入开机固定 MAC、静态 IP 及 DHCP 极速响应初始化脚本
+          # 4. 植入开机固定 MAC、静态 IP 及 DHCP 极速响应初始化脚本
           mkdir -p files/etc/uci-defaults
           cat << 'EOF' > files/etc/uci-defaults/99-custom-network-settings
           #!/bin/sh
@@ -106,7 +106,9 @@ jobs:
           EOF
           chmod +x files/etc/uci-defaults/99-custom-network-settings
           
+          # 5. 生成并自动对齐旧配置，防止内核编译中断
           make defconfig
+          make olddefconfig
 
       - name: Download Package Toolchain
         run: |
