@@ -56,7 +56,7 @@ jobs:
 
       - name: Apply Config, DTS Fix and Network Settings
         run: |
-          # 1. 严格校验并加载 iStoreOS-Actions 仓库中的 r1s-h3.config 配置文件
+          # 1. 严格从 actions_temp 加载 r1s-h3.config
           if [ -f "actions_temp/r1s-h3.config" ]; then
             cp -f actions_temp/r1s-h3.config .config
             echo "成功加载 iStoreOS-Actions 仓库中的 r1s-h3.config 配置文件！"
@@ -65,7 +65,7 @@ jobs:
             exit 1
           fi
 
-          # 2. 补齐核心输出与语言精简限制（仅保留中英文，剔除多余语言包）
+          # 2. 补齐核心输出与语言精简限制（仅保留中英文）
           echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
           echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
           
@@ -107,8 +107,8 @@ jobs:
           EOF
           chmod +x files/etc/uci-defaults/99-custom-network-settings
           
-          # 5. 使用安全清理脚本静默过滤无效配置，彻底解决 olddefconfig 报错卡死
-          make defconfig || { echo "defconfig 遇到配置冲突，正在执行自动清理修复..."; yes "" | make oldconfig; }
+          # 5. 标准生成顶层配置
+          make defconfig
 
       - name: Download Package Toolchain
         run: |
@@ -117,6 +117,10 @@ jobs:
 
       - name: Compile Firmware
         run: |
+          # 6. 核心大招：在内核模块编译前，用静默对齐命令一劳永逸吞掉所有未来的 (NEW) 未声明选项
+          yes "" | make kernel_olddefconfig || true
+          
+          # 7. 满负荷平稳编译
           make -j$(nproc) || make -j1 V=s
 
       - name: Organize Artifacts
