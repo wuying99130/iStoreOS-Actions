@@ -69,13 +69,23 @@ jobs:
           echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
           echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
           
-          # 3. 修复 DTS 文件中的 mmc2 (SDIO WiFi) 禁用状态为 okay
+          # 3. 根本解决内核 syncconfig 报错：直接将 REALTEK_PHY_HWMON 声明写入底层内核配置文件
+          KERNEL_CONFIG="target/linux/sunxi/config-6.6"
+          if [ -f "$KERNEL_CONFIG" ]; then
+            echo "# CONFIG_REALTEK_PHY_HWMON is not set" >> "$KERNEL_CONFIG"
+            echo "已成功向 $KERNEL_CONFIG 写入内核配置声明"
+          else
+            find target/linux/ -name "config-6.6*" -exec sh -c 'echo "# CONFIG_REALTEK_PHY_HWMON is not set" >> "{}"' \;
+            echo "已通过全局兜底完成内核配置声明写入"
+          fi
+
+          # 4. 修复 DTS 文件中的 mmc2 (SDIO WiFi) 禁用状态为 okay
           DTS_FILE=$(find target/linux/sunxi/ -iname "*nanopi*r1s*.dts" 2>/dev/null | head -n 1)
           if [ -n "$DTS_FILE" ]; then
             sed -i '/&mmc2/,/};/s/status = "disabled";/status = "okay";/' "$DTS_FILE"
           fi
           
-          # 4. 植入开机固定 MAC、静态 IP 及 DHCP 极速响应初始化脚本
+          # 5. 植入开机固定 MAC、静态 IP 及 DHCP 极速响应初始化脚本
           mkdir -p files/etc/uci-defaults
           cat << 'EOF' > files/etc/uci-defaults/99-custom-network-settings
           #!/bin/sh
@@ -107,7 +117,7 @@ jobs:
           EOF
           chmod +x files/etc/uci-defaults/99-custom-network-settings
           
-          # 5. 生成顶层依赖配置
+          # 6. 生成顶层依赖配置
           make defconfig
 
       - name: Download Package Toolchain
@@ -117,9 +127,6 @@ jobs:
 
       - name: Compile Firmware
         run: |
-          # 自动化对齐所有内核配置，自动补全任何 (NEW) 未知项声明，防止非交互式环境卡死
-          yes "" | make kernel_olddefconfig || true
-          
           # 正式满负荷编译
           make -j$(nproc) || make -j1 V=s
 
